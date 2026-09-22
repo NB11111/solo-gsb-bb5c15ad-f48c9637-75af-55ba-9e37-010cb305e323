@@ -65,6 +65,17 @@ class AuditRequest(BaseModel):
     zones: List[Zone] = Field(default_factory=list, description="禁飞区列表")
 
 
+class CounterfactualRequest(BaseModel):
+    """反事实审计请求：在原始请求基础上增加必填的高度平移量。"""
+
+    waypoints: List[Waypoint] = Field(..., min_length=2, description="按时间升序的航点")
+    zones: List[Zone] = Field(default_factory=list, description="禁飞区列表")
+    altitude_offset: float = Field(
+        ...,
+        description="全部航点高度统一平移量，米；正值升高、负值降低、0 为原样重跑",
+    )
+
+
 class Position(BaseModel):
     lat: float
     lon: float
@@ -85,6 +96,37 @@ class Violation(BaseModel):
 class AuditResponse(BaseModel):
     violation_count: int
     violations: List[Violation]
+
+
+class ViolationSummary(BaseModel):
+    """违规摘要：匹配所需的标识键（zone_id + entry_time + exit_time）及必要上下文。"""
+
+    zone_id: str
+    kind: Literal["entry", "graze"] = Field(..., description="entry=真正进入；graze=擦边接触")
+    entry_time: datetime
+    exit_time: datetime
+    segment_start: int = Field(..., description="进入点所在的航段下标（从 0 开始）")
+    segment_end: int = Field(..., description="离开点所在的航段下标")
+
+
+class CounterfactualResponse(BaseModel):
+    altitude_offset: float = Field(..., description="本次使用的高度平移量，米")
+    baseline: List[ViolationSummary] = Field(
+        ..., description="原始航迹的违规摘要，按 (entry_time, zone_id, exit_time) 稳定升序"
+    )
+    shifted: List[ViolationSummary] = Field(
+        ..., description="高度平移后的违规摘要，排序规则与 baseline 相同"
+    )
+    cleared: List[ViolationSummary] = Field(
+        ..., description="baseline 中有、shifted 中无的违规（平移后消除），同序稳定排列"
+    )
+    introduced: List[ViolationSummary] = Field(
+        ..., description="shifted 中有、baseline 中无的违规（平移后新增），同序稳定排列"
+    )
+    baseline_count: int
+    shifted_count: int
+    cleared_count: int
+    introduced_count: int
 
 
 class ViolationProperties(BaseModel):
