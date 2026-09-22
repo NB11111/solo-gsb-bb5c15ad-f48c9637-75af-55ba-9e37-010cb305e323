@@ -65,6 +65,16 @@ class AuditRequest(BaseModel):
     zones: List[Zone] = Field(default_factory=list, description="禁飞区列表")
 
 
+class CounterfactualRequest(AuditRequest):
+    """在 /audit 请求基础上增加必填的高度平移量（反事实审计）。"""
+
+    altitude_offset: float = Field(
+        ...,
+        allow_inf_nan=False,
+        description="高度平移量（米）：正数整体抬高航迹，负数整体降低",
+    )
+
+
 class Position(BaseModel):
     lat: float
     lon: float
@@ -85,6 +95,22 @@ class Violation(BaseModel):
 class AuditResponse(BaseModel):
     violation_count: int
     violations: List[Violation]
+
+
+class CounterfactualResponse(BaseModel):
+    """反事实审计结果：baseline/shifted 为两次完整审计，cleared/introduced 为差集摘要。
+
+    匹配键为 (zone_id, entry_time, exit_time)：基线中存在而平移后消失的记入
+    cleared，平移后才出现的记入 introduced。
+    """
+
+    altitude_offset: float = Field(..., description="实际使用的高度平移量（米）")
+    baseline: AuditResponse = Field(..., description="原始航迹的审计结果")
+    shifted: AuditResponse = Field(..., description="全部航点高度平移后的审计结果")
+    cleared_count: int = Field(..., description="平移后消除的违规条数")
+    introduced_count: int = Field(..., description="平移后新引入的违规条数")
+    cleared: List[Violation] = Field(..., description="基线中存在、平移后不再出现的违规")
+    introduced: List[Violation] = Field(..., description="平移后才出现的违规")
 
 
 class ViolationProperties(BaseModel):

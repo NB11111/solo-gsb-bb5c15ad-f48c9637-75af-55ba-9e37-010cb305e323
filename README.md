@@ -128,6 +128,84 @@ pytest
 
 无违规时返回 `{"type": "FeatureCollection", "features": []}`。422 校验规则与 `/audit` 相同。
 
+### POST /audit/counterfactual
+
+反事实高度审计：把全部航点高度统一平移 `altitude_offset` 米后重新执行与 `/audit` 完全相同的审计，再与原始（baseline）结果比对，回答“如果整体飞高/飞低 X 米，违规会如何变化”。
+
+**请求体**在 `/audit` 的基础上增加一个必填字段：
+
+- `altitude_offset`：高度平移量（米），正数整体抬高、负数整体降低；必须为有限数值（NaN/±Inf 返回 422）。
+
+```json
+{
+  "waypoints": [
+    {"lat": 39.905, "lon": 116.29, "alt": 50, "time": "2026-09-22T10:00:00Z"},
+    {"lat": 39.905, "lon": 116.34, "alt": 50, "time": "2026-09-22T10:30:00Z"}
+  ],
+  "zones": [
+    {
+      "id": "nfz-1",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[116.30, 39.90], [116.32, 39.90], [116.32, 39.92], [116.30, 39.92], [116.30, 39.90]]]
+      },
+      "active_from": "2026-09-22T10:00:00Z",
+      "active_to": "2026-09-22T11:00:00Z",
+      "min_alt": 0,
+      "max_alt": 120
+    }
+  ],
+  "altitude_offset": 100
+}
+```
+
+**响应 200**
+
+```json
+{
+  "altitude_offset": 100.0,
+  "baseline": {
+    "violation_count": 1,
+    "violations": [
+      {
+        "zone_id": "nfz-1",
+        "kind": "entry",
+        "entry_time": "2026-09-22T10:06:00Z",
+        "exit_time": "2026-09-22T10:18:00Z",
+        "entry_position": {"lat": 39.905, "lon": 116.30, "alt": 50.0},
+        "exit_position": {"lat": 39.905, "lon": 116.32, "alt": 50.0},
+        "segment_start": 0,
+        "segment_end": 0
+      }
+    ]
+  },
+  "shifted": {"violation_count": 0, "violations": []},
+  "cleared_count": 1,
+  "introduced_count": 0,
+  "cleared": [
+    {
+      "zone_id": "nfz-1",
+      "kind": "entry",
+      "entry_time": "2026-09-22T10:06:00Z",
+      "exit_time": "2026-09-22T10:18:00Z",
+      "entry_position": {"lat": 39.905, "lon": 116.30, "alt": 50.0},
+      "exit_position": {"lat": 39.905, "lon": 116.32, "alt": 50.0},
+      "segment_start": 0,
+      "segment_end": 0
+    }
+  ],
+  "introduced": []
+}
+```
+
+- `baseline` / `shifted`：原始航迹与平移后航迹的两次完整审计结果，结构与 `/audit` 响应一致；`baseline` 与用同一请求体调用 `/audit` 的结果完全相同。
+- `cleared` / `introduced`：两组违规摘要。两次结果按 **`(zone_id, entry_time, exit_time)`** 匹配（多重集语义）：基线中存在而平移后消失的记入 `cleared`，平移后才出现的记入 `introduced`。
+- 注意平移会改变高度窗口的命中区间，幸存违规的进入/离开时刻可能随之改变；时刻发生变化的违规会呈现为一条 `cleared` 加一条 `introduced`。
+- `cleared`、`introduced` 均按进入时间稳定排序，相同输入的响应逐字节一致。
+- 平移在航点副本上进行，不修改请求中的原始数据。
+
+**响应 422**：校验规则与 `/audit` 相同（航点乱序、多边形非法、参数错误等），此外 `altitude_offset` 缺失或不是有限数值也返回 422。
+
 ## 判定规则
 
 对每一条**相邻航段**（而非仅航点）逐一审计。航段上任意点用分数 f ∈ [0,1] 表示，位置、时间、高度均为 f 的线性函数，因此三个条件各自对应一个 f 区间：
@@ -142,13 +220,15 @@ pytest
 
 ```
 app/
-  main.py     # FastAPI 入口与路由（/audit、/audit/geojson）
-  models.py   # 请求/响应模型与参数校验（含 GeoJSON 响应模型）
-  audit.py    # 核心审计算法（平面求交 + f 域三窗口求交 + 区间合并）
-  geojson.py  # 违规区间 → GeoJSON FeatureCollection 转换
+  main.py           # FastAPI 入口与路由（/audit、/audit/geojson、/audit/counterfactual）
+  models.py         # 请求/响应模型与参数校验（含 GeoJSON、反事实响应模型）
+  audit.py          # 核心审计算法（平面求交 + f 域三窗口求交 + 区间合并）
+  geojson.py        # 违规区间 → GeoJSON FeatureCollection 转换
+  counterfactual.py # 反事实审计（高度平移 + 两次审计结果按匹配键求差集）
 tests/
-  test_audit.py     # POST /audit
-  test_geojson.py   # POST /audit/geojson
+  test_audit.py           # POST /audit
+  test_geojson.py         # POST /audit/geojson
+  test_counterfactual.py  # POST /audit/counterfactual
 Dockerfile
 docker-compose.yml
 ```
